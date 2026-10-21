@@ -1,5 +1,6 @@
 // Image upload helpers: MIME checks, phone-friendly soft size limit, and client-side compress/resize.
 // We never block typical camera photos with a tiny hard MB cap — we accept first, then compress for Konva/print.
+// Transparent PNG/WebP stay PNG/WebP — never flatten alpha into a black JPEG background.
 
 /** Soft raw-input ceiling so extreme multi-dozen-MB dumps are rejected before decode. Phone photos are fine. */
 export const MAX_RAW_INPUT_BYTES = 20 * 1024 * 1024;
@@ -7,8 +8,11 @@ export const MAX_RAW_INPUT_BYTES = 20 * 1024 * 1024;
 /** Longest edge for the print-ready image stored as originalImage (keeps RIP quality without huge payloads). */
 export const MAX_PRINT_DIMENSION = 2048;
 
-/** JPEG quality for the compressed print-ready data URL. */
+/** JPEG quality for the compressed print-ready data URL (JPEG only). */
 export const PRINT_JPEG_QUALITY = 0.92;
+
+/** Quality hint for WebP re-encode after resize. */
+export const PRINT_WEBP_QUALITY = 0.95;
 
 /** Raster MIME types accepted from the file picker and contest server action (SVGs remain rejected). */
 export const ALLOWED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
@@ -93,16 +97,24 @@ export function validateImageUploadFile(file: File): ImageUploadValidationResult
   return { ok: true };
 }
 
-// Accept the file, then resize/compress client-side into a print-ready JPEG + blob URL for Konva.
+// Accept the file, then resize/compress while preserving the native format (PNG keeps transparency).
 export async function processImageUploadFile(file: File): Promise<ProcessedImageUpload | FailedImageUpload> {
   const validation = validateImageUploadFile(file);
   if (!validation.ok) {
     return { ok: false, errorMessage: validation.errorMessage || "Upload rejected." };
   }
   try {
-    const { dataUrl, objectUrl, width, height } = await compressImageFileToUrls(file);
+    const sourceMime = resolveUploadMime(file);
+    const { dataUrl, objectUrl, width, height, mime } = await compressImageFileToUrls(file, sourceMime);
     const baseName = file.name.replace(/\.[^.]+$/, "") || "phone-photo";
-    return { ok: true, dataUrl, objectUrl, fileName: `${baseName}.jpg`, width, height };
+    return {
+      ok: true,
+      dataUrl,
+      objectUrl,
+      fileName: `${baseName}.${extensionForMime(mime)}`,
+      width,
+      height,
+    };
   } catch (err) {
     console.error("Failed to compress uploaded image:", err);
     return { ok: false, errorMessage: "Could not process that image. Please try another photo." };
@@ -115,41 +127,95 @@ export function stripDataUrlBase64Prefix(dataUrl: string): string | null {
   return match ? match[1] : null;
 }
 
-// Decode the File, downscale so the longest edge is MAX_PRINT_DIMENSION, and export JPEG.
-// Returns both a data URL (email) and a blob: object URL (Konva) from the same bytes.
+/**
+ * Decode the File, downscale when needed, and keep the native MIME.
+ * - No resize → original bytes via FileReader (PNG/WebP alpha untouched).
+ * - Resize → canvas export as JPEG only for JPEGs; PNG/WebP stay alpha-capable.
+ */
 async function compressImageFileToUrls(
-  file: File
-): Promise<{ dataUrl: string; objectUrl: string; width: number; height: number }> {
+  file: File,
+  sourceMime: string
+): Promise<{ dataUrl: string; objectUrl: string; width: number; height: number; mime: string }> {
   const bitmap = await createImageBitmap(file);
   try {
     const scale = Math.min(1, MAX_PRINT_DIMENSION / Math.max(bitmap.width, bitmap.height));
     const width = Math.max(1, Math.round(bitmap.width * scale));
     const height = Math.max(1, Math.round(bitmap.height * scale));
+
+    // Already within print size — keep original bytes (no canvas re-encode / no black fill).
+    if (scale >= 1) {
+      const dataUrl = await readFileAsDataUrl(file);
+      const objectUrl = URL.createObjectURL(file);
+      return { dataUrl, objectUrl, width: bitmap.width, height: bitmap.height, mime: sourceMime };
+    }
+
+    // Offscreen resize — export format preserves transparency for non-JPEG uploads.
+    const outMime = exportMimeForUpload(sourceMime);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: outMime !== "image/jpeg" });
     if (!ctx) throw new Error("Canvas 2D context unavailable");
+    // Do not fill a background — leave the canvas transparent for PNG/WebP.
+    ctx.clearRect(0, 0, width, height);
     ctx.drawImage(bitmap, 0, 0, width, height);
 
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (result) => (result ? resolve(result) : reject(new Error("toBlob failed"))),
-        "image/jpeg",
-        PRINT_JPEG_QUALITY
-      );
-    });
-
-    // Object URL for Konva — revoked when the side is cleared or replaced.
+    const quality = outMime === "image/jpeg" ? PRINT_JPEG_QUALITY : PRINT_WEBP_QUALITY;
+    const blob = await canvasToBlob(canvas, outMime, quality);
     const objectUrl = URL.createObjectURL(blob);
-    const dataUrl = await blobToDataUrl(blob);
-    return { dataUrl, objectUrl, width, height };
+    const dataUrl = await readFileAsDataUrl(blob);
+    return { dataUrl, objectUrl, width, height, mime: outMime };
   } finally {
     bitmap.close();
   }
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
+/** JPEG stays JPEG; everything else that can carry alpha exports as PNG (or WebP when source was WebP). */
+function exportMimeForUpload(sourceMime: string): string {
+  if (sourceMime === "image/jpeg") return "image/jpeg";
+  if (sourceMime === "image/webp") return "image/webp";
+  // Default for PNG and unknown — never force JPEG (that flattens transparency to black).
+  return "image/png";
+}
+
+function resolveUploadMime(file: File): string {
+  const mime = (file.type || "").toLowerCase().trim();
+  if (isAllowedImageMime(mime)) return mime;
+  return inferMimeFromName(file.name) || "image/png";
+}
+
+function extensionForMime(mime: string): string {
+  if (mime === "image/jpeg") return "jpg";
+  if (mime === "image/webp") return "webp";
+  return "png";
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (result) => {
+        if (result) {
+          resolve(result);
+          return;
+        }
+        // Some browsers reject image/webp on toBlob — fall back to PNG to keep alpha.
+        if (mime === "image/webp") {
+          canvas.toBlob(
+            (png) => (png ? resolve(png) : reject(new Error("toBlob failed"))),
+            "image/png"
+          );
+          return;
+        }
+        reject(new Error("toBlob failed"));
+      },
+      mime,
+      quality
+    );
+  });
+}
+
+/** FileReader path — preserves the file's native MIME in the data URL header. */
+function readFileAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));

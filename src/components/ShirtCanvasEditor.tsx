@@ -169,8 +169,8 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
     if (nextPlacement) onPlacementChange(withPhysicalDimensions(clampPlacementInsideSafeZone(nextPlacement)));
   };
 
-  // Brand blue on black shirts; magenta accent on white (no red OOB state).
-  const guideColor = shirtColor === "black" ? BRAND_BLUE : "#db2777";
+  // Brand blue guides/transformer on both shirt colors.
+  const guideColor = BRAND_BLUE;
   const showTransformer = showGuides && isSelected && Boolean(designImgElement);
   // Center-pivoted node: x/y is the visual center; offset is half the local (unscaled) size.
   const nodeCenter = placementToNodeCenter(placement);
