@@ -9,7 +9,7 @@ import { SAFE_PRINT_ZONE, STAGE_HEIGHT, STAGE_WIDTH, getShirtPublicSrc } from "@
 import { MultiTouchSnapshot, computeTwoFingerGesture, isRectOutOfSafeZone, roundCoord } from "@/lib/touchGestureMath";
 import { calcPhysicalDimensionsInches, formatPhysicalDimensionsDisplay, PhysicalDimensionsDisplay, withPhysicalDimensions } from "@/lib/physicalDimensions";
 import { BRAND_BLUE } from "@/lib/brand";
-import { DEFAULT_PLACEMENT } from "@/lib/dualDesign";
+import { placementFittingImageAspect } from "@/lib/dualDesign";
 import { useHtmlImage } from "@/lib/useHtmlImage";
 import CanvasUtilityToolbar from "@/components/CanvasUtilityToolbar";
 import CanvasInfoOverlays from "@/components/CanvasInfoOverlays";
@@ -44,6 +44,28 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
   const shirtImgElement = useHtmlImage(getShirtPublicSrc(shirtColor, view));
   const designImgElement = useHtmlImage(originalImageData);
   const [isSelected, setIsSelected] = useState(true);
+  // Track which src we already aspect-fitted so Front/Back toggles do not wipe user transforms.
+  const fittedSrcRef = useRef<string | null>(null);
+
+  // When a new upload loads, re-fit from naturalWidth/Height if parent used a placeholder placement.
+  useEffect(() => {
+    if (!designImgElement || !originalImageData) {
+      if (!originalImageData) fittedSrcRef.current = null;
+      return;
+    }
+    if (fittedSrcRef.current === originalImageData) return;
+    const nw = designImgElement.naturalWidth;
+    const nh = designImgElement.naturalHeight;
+    if (!(nw > 0 && nh > 0)) return;
+    fittedSrcRef.current = originalImageData;
+    // Only auto-fit when the current placement still looks like the old fixed default box
+    // (avoids fighting a parent that already set aspect-correct placement at upload).
+    const defaultLooksWrong =
+      Math.abs(placement.width / Math.max(1, placement.height) - nw / nh) > 0.02;
+    if (defaultLooksWrong && placement.rotation === 0 && placement.scale === 1) {
+      onPlacementChange(placementFittingImageAspect(nw, nh));
+    }
+  }, [designImgElement, originalImageData, placement.width, placement.height, placement.rotation, placement.scale, onPlacementChange]);
 
   // Skip redundant OOB setState when the boolean has not changed.
   const checkNodeBounds = useCallback(() => {
@@ -86,7 +108,14 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
         return "";
       }
     },
-    centerAndResetDesign: () => onPlacementChange({ ...DEFAULT_PLACEMENT }),
+    centerAndResetDesign: () => {
+      const img = designImgElement;
+      if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
+        onPlacementChange(placementFittingImageAspect(img.naturalWidth, img.naturalHeight));
+        return;
+      }
+      onPlacementChange(placementFittingImageAspect(placement.width, placement.height));
+    },
   }));
 
   // Live inches from node.width()*scaleX while Transformer scales.
@@ -166,12 +195,21 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
                   const node = designNodeRef.current;
                   if (!node) return;
                   checkNodeBounds();
+                  // keepRatio locks X/Y — use one uniform scale so width/height never drift apart.
+                  const uniformScale = Math.abs(node.scaleX()) || 1;
                   onPlacementChange(withPhysicalDimensions({
-                    x: roundCoord(node.x() - SAFE_PRINT_ZONE.x), y: roundCoord(node.y() - SAFE_PRINT_ZONE.y),
-                    width: roundCoord(node.width()), height: roundCoord(node.height()),
-                    rotation: roundCoord(node.rotation()), scale: roundCoord(node.scaleX()),
-                    physicalWidthInches: 0, physicalHeightInches: 0,
+                    x: roundCoord(node.x() - SAFE_PRINT_ZONE.x),
+                    y: roundCoord(node.y() - SAFE_PRINT_ZONE.y),
+                    width: roundCoord(node.width()),
+                    height: roundCoord(node.height()),
+                    rotation: roundCoord(node.rotation()),
+                    scale: roundCoord(uniformScale),
+                    physicalWidthInches: 0,
+                    physicalHeightInches: 0,
                   }));
+                  // Keep Konva node scales matched after the gesture (prevents rare X/Y drift).
+                  node.scaleX(uniformScale);
+                  node.scaleY(uniformScale);
                 }}
               />
             )}
@@ -180,11 +218,22 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
                 {/* Stem under the transformer so the white rotater circle paints on top of the line */}
                 <RotateAnchorStem transformerRef={transformerRef} stageRef={stageRef} stroke={guideColor} enabled={showTransformer}
                   syncKey={`${placement.x},${placement.y},${placement.scale},${placement.rotation}`} />
-                <Transformer ref={transformerRef} rotateEnabled rotateLineVisible={false} rotateAnchorOffset={28} preventDefault
+                <Transformer
+                  ref={transformerRef}
+                  rotateEnabled
+                  rotateLineVisible={false}
+                  rotateAnchorOffset={28}
+                  preventDefault
+                  // Lock proportions — corner anchors only (no mid-side stretch handles).
+                  keepRatio
                   enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
-                  anchorSize={12} anchorCornerRadius={6}
-                  borderStroke={guideColor} anchorStroke={guideColor} anchorFill="#ffffff"
-                  anchorStyleFunc={placeRotateAnchorBelow} />
+                  anchorSize={12}
+                  anchorCornerRadius={6}
+                  borderStroke={guideColor}
+                  anchorStroke={guideColor}
+                  anchorFill="#ffffff"
+                  anchorStyleFunc={placeRotateAnchorBelow}
+                />
               </>
             )}
           </Layer>

@@ -63,6 +63,9 @@ export interface ProcessedImageUpload {
    */
   objectUrl: string;
   fileName: string;
+  /** Pixel size after compress/resize — used for aspect-correct Konva placement. */
+  width: number;
+  height: number;
 }
 
 export interface FailedImageUpload {
@@ -97,9 +100,9 @@ export async function processImageUploadFile(file: File): Promise<ProcessedImage
     return { ok: false, errorMessage: validation.errorMessage || "Upload rejected." };
   }
   try {
-    const { dataUrl, objectUrl } = await compressImageFileToUrls(file);
+    const { dataUrl, objectUrl, width, height } = await compressImageFileToUrls(file);
     const baseName = file.name.replace(/\.[^.]+$/, "") || "phone-photo";
-    return { ok: true, dataUrl, objectUrl, fileName: `${baseName}.jpg` };
+    return { ok: true, dataUrl, objectUrl, fileName: `${baseName}.jpg`, width, height };
   } catch (err) {
     console.error("Failed to compress uploaded image:", err);
     return { ok: false, errorMessage: "Could not process that image. Please try another photo." };
@@ -114,7 +117,9 @@ export function stripDataUrlBase64Prefix(dataUrl: string): string | null {
 
 // Decode the File, downscale so the longest edge is MAX_PRINT_DIMENSION, and export JPEG.
 // Returns both a data URL (email) and a blob: object URL (Konva) from the same bytes.
-async function compressImageFileToUrls(file: File): Promise<{ dataUrl: string; objectUrl: string }> {
+async function compressImageFileToUrls(
+  file: File
+): Promise<{ dataUrl: string; objectUrl: string; width: number; height: number }> {
   const bitmap = await createImageBitmap(file);
   try {
     const scale = Math.min(1, MAX_PRINT_DIMENSION / Math.max(bitmap.width, bitmap.height));
@@ -138,7 +143,7 @@ async function compressImageFileToUrls(file: File): Promise<{ dataUrl: string; o
     // Object URL for Konva — revoked when the side is cleared or replaced.
     const objectUrl = URL.createObjectURL(blob);
     const dataUrl = await blobToDataUrl(blob);
-    return { dataUrl, objectUrl };
+    return { dataUrl, objectUrl, width, height };
   } finally {
     bitmap.close();
   }

@@ -32,6 +32,9 @@ export interface SideDesign {
   compositeProofImage?: string | null;
   isOutOfBounds?: boolean;
   fileName?: string | null;
+  /** Natural pixel size of the uploaded artwork — used to reset without distorting aspect. */
+  naturalWidth?: number | null;
+  naturalHeight?: number | null;
 }
 
 /** Exact designs.front / designs.back shape sent with a contest entry. */

@@ -18,7 +18,7 @@ import {
   buildOutOfBoundsToastMessage,
   createEmptySideDesign,
   createSideDesign,
-  DEFAULT_PLACEMENT,
+  placementFittingImageAspect,
   getActiveSide,
   getOutOfBoundsSideLabels,
   toSideDesignPayload,
@@ -97,11 +97,17 @@ export default function TShirtDesignerApp() {
   };
 
   /** Replace active side artwork and revoke any previous blob: URL first. */
-  const replaceActiveDesign = (displaySrc: string, fileName: string, printDataUrl: string) => {
+  const replaceActiveDesign = (
+    displaySrc: string,
+    fileName: string,
+    printDataUrl: string,
+    naturalWidth: number,
+    naturalHeight: number
+  ) => {
     setLivePhysical(null);
     setActive((prev) => {
       revokeObjectUrlIfNeeded(prev.originalImage);
-      return createSideDesign(displaySrc, fileName, printDataUrl);
+      return createSideDesign(displaySrc, fileName, printDataUrl, naturalWidth, naturalHeight);
     });
   };
 
@@ -197,7 +203,19 @@ export default function TShirtDesignerApp() {
           }}
           onResetPlacement={() => {
             setLivePhysical(null);
-            setActive((prev) => ({ ...prev, placementData: { ...DEFAULT_PLACEMENT }, isOutOfBounds: false, compositeProofImage: null }));
+            setActive((prev) => {
+              // Reset to centered aspect-correct fit (not the old fixed 12"×11.5" box).
+              const nextPlacement =
+                prev.naturalWidth && prev.naturalHeight
+                  ? placementFittingImageAspect(prev.naturalWidth, prev.naturalHeight)
+                  : prev.placementData;
+              return {
+                ...prev,
+                placementData: nextPlacement,
+                isOutOfBounds: false,
+                compositeProofImage: null,
+              };
+            });
             toast.success("Placement reset");
           }}
           onClearSide={clearActiveSide}
@@ -208,8 +226,8 @@ export default function TShirtDesignerApp() {
         />
         <ProductConfigControls
           activeView={view}
-          onImageFileSelected={(objectUrl, dataUrl, fileName) => {
-            replaceActiveDesign(objectUrl, fileName, dataUrl);
+          onImageFileSelected={(objectUrl, dataUrl, fileName, width, height) => {
+            replaceActiveDesign(objectUrl, fileName, dataUrl, width, height);
           }}
           onImageUploadRejected={(message) => toast.error(message)}
         />

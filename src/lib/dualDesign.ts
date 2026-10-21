@@ -1,6 +1,12 @@
 // Helpers for independent Front / Back side design state and the dual-sided checkout payload.
 
-import { defaultPrintPxSize, SAFE_ZONE_PX_HEIGHT, SAFE_ZONE_PX_WIDTH, withPhysicalDimensions } from "@/lib/physicalDimensions";
+import {
+  defaultPrintPxSize,
+  fitSizeInsideSafeZone,
+  SAFE_ZONE_PX_HEIGHT,
+  SAFE_ZONE_PX_WIDTH,
+  withPhysicalDimensions,
+} from "@/lib/physicalDimensions";
 import { roundCoord } from "@/lib/touchGestureMath";
 import { PlacementData, SideDesign, SideDesignPayload, ShirtView } from "@/types/order";
 
@@ -19,6 +25,27 @@ export const DEFAULT_PLACEMENT: PlacementData = withPhysicalDimensions({
   physicalHeightInches: 0,
 });
 
+/**
+ * Build a centered placement that matches the image's natural aspect ratio
+ * (no stretch/squash when the upload first appears on the shirt).
+ */
+export function placementFittingImageAspect(
+  naturalWidth: number,
+  naturalHeight: number
+): PlacementData {
+  const { width, height } = fitSizeInsideSafeZone(naturalWidth, naturalHeight);
+  return withPhysicalDimensions({
+    x: roundCoord((SAFE_ZONE_PX_WIDTH - width) / 2),
+    y: roundCoord((SAFE_ZONE_PX_HEIGHT - height) / 2),
+    width: roundCoord(width),
+    height: roundCoord(height),
+    rotation: 0,
+    scale: 1,
+    physicalWidthInches: 0,
+    physicalHeightInches: 0,
+  });
+}
+
 // Create an empty side (no artwork) for testing 1-sided / blank states.
 export function createEmptySideDesign(): SideDesign {
   return {
@@ -28,6 +55,8 @@ export function createEmptySideDesign(): SideDesign {
     compositeProofImage: null,
     isOutOfBounds: false,
     fileName: null,
+    naturalWidth: null,
+    naturalHeight: null,
   };
 }
 
@@ -35,20 +64,28 @@ export function createEmptySideDesign(): SideDesign {
  * Create a side with artwork.
  * displaySrc is what Konva draws (blob: URL preferred).
  * printDataUrl is the base64 raster payload for Resend (required when displaySrc is blob:).
+ * naturalWidth/Height drive the initial aspect-correct fit inside the Safe Print Zone.
  */
 export function createSideDesign(
   displaySrc: string,
   fileName: string | null,
-  printDataUrl?: string | null
+  printDataUrl?: string | null,
+  naturalWidth?: number | null,
+  naturalHeight?: number | null
 ): SideDesign {
+  const hasNatural = Boolean(naturalWidth && naturalHeight && naturalWidth > 0 && naturalHeight > 0);
   return {
     originalImage: displaySrc,
     // Fall back to displaySrc when callers still pass a data URL as the only src.
     originalImageData: printDataUrl ?? (displaySrc.startsWith("data:") ? displaySrc : null),
-    placementData: { ...DEFAULT_PLACEMENT },
+    placementData: hasNatural
+      ? placementFittingImageAspect(naturalWidth as number, naturalHeight as number)
+      : { ...DEFAULT_PLACEMENT },
     compositeProofImage: null,
     isOutOfBounds: false,
     fileName,
+    naturalWidth: hasNatural ? (naturalWidth as number) : null,
+    naturalHeight: hasNatural ? (naturalHeight as number) : null,
   };
 }
 

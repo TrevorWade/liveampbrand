@@ -29,6 +29,34 @@ export function defaultPrintPxSize(): { width: number; height: number } {
   };
 }
 
+/**
+ * Fit an image inside the Safe Print Zone without distorting its natural aspect ratio.
+ * Uses the same max box as the old default placement (75% zone W × 57.5% zone H).
+ */
+export function fitSizeInsideSafeZone(
+  naturalWidth: number,
+  naturalHeight: number
+): { width: number; height: number } {
+  const maxAllowedWidth = SAFE_ZONE_PX_WIDTH * DEFAULT_PRINT_WIDTH_ZONE_FRAC;
+  const maxAllowedHeight = SAFE_ZONE_PX_HEIGHT * DEFAULT_PRINT_HEIGHT_ZONE_FRAC;
+  const aspect = naturalWidth / Math.max(1, naturalHeight);
+  const boxAspect = maxAllowedWidth / maxAllowedHeight;
+
+  let width: number;
+  let height: number;
+
+  // Wider than the allowed box → lock width; taller → lock height (preserves aspect).
+  if (aspect > boxAspect) {
+    width = maxAllowedWidth;
+    height = maxAllowedWidth / aspect;
+  } else {
+    height = maxAllowedHeight;
+    width = maxAllowedHeight * aspect;
+  }
+
+  return { width, height };
+}
+
 export interface PhysicalDimensionsInches {
   widthInches: number;
   heightInches: number;

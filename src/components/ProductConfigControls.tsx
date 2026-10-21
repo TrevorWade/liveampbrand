@@ -9,8 +9,14 @@ import { ShirtView } from "@/types/order";
 
 interface ProductConfigControlsProps {
   activeView: ShirtView;
-  /** objectUrl for Konva, dataUrl for Resend, plus display file name. */
-  onImageFileSelected: (objectUrl: string, dataUrl: string, fileName: string) => void;
+  /** objectUrl for Konva, dataUrl for Resend, file name, and natural pixel size for aspect fit. */
+  onImageFileSelected: (
+    objectUrl: string,
+    dataUrl: string,
+    fileName: string,
+    width: number,
+    height: number
+  ) => void;
   onImageUploadRejected: (message: string) => void;
 }
 
@@ -33,7 +39,7 @@ export default function ProductConfigControls({
       return;
     }
     // objectUrl → Konva display (revoked on Clear Side); dataUrl → server action attachments.
-    onImageFileSelected(result.objectUrl, result.dataUrl, result.fileName);
+    onImageFileSelected(result.objectUrl, result.dataUrl, result.fileName, result.width, result.height);
   };
 
   return (
