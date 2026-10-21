@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Single source of truth for brand blue / cyan UI accents (use via bg/text-[var(--brand-blue)]) */
+:root {
+  --brand-blue: #8ad4e1;
+}
+
+@layer utilities {
+  .bg-brand-blue {
+    background-color: var(--brand-blue);
+  }
+  .text-brand-blue {
+    color: var(--brand-blue);
+  }
+  .border-brand-blue {
+    border-color: var(--brand-blue);
+  }
+  .border-brand-blue\/40 {
+    border-color: color-mix(in srgb, var(--brand-blue) 40%, transparent);
+  }
+  .to-brand-blue {
+    --tw-gradient-to: var(--brand-blue) var(--tw-gradient-to-position);
+  }
+}
+
+/* Allow smooth vertical page scrolling on mobile while preventing accidental pull-to-refresh. */
+html,
+body {
+  background-color: #09090b;
+  color: #f4f4f5;
+  overscroll-behavior-y: contain;
+}
+
+/* Allow vertical page scrolling when touching non-interactive areas of the Konva stage. */
+.konvajs-content,
+.konvajs-content canvas {
+  touch-action: pan-y !important;
+}

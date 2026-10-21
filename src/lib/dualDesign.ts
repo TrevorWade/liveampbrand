@@ -1,0 +1,98 @@
+// Helpers for independent Front / Back side design state and the dual-sided checkout payload.
+
+import { defaultPrintPxSize, SAFE_ZONE_PX_HEIGHT, SAFE_ZONE_PX_WIDTH, withPhysicalDimensions } from "@/lib/physicalDimensions";
+import { roundCoord } from "@/lib/touchGestureMath";
+import { PlacementData, SideDesign, SideDesignPayload, ShirtView } from "@/types/order";
+
+// Contained baseline: 0.75 × zone W → 12.0", 0.575 × zone H → 11.5", centered in the Safe Print Zone.
+const defaultPx = defaultPrintPxSize();
+
+/** Default placement centered inside the Safe Print Zone (includes baseline print inches). */
+export const DEFAULT_PLACEMENT: PlacementData = withPhysicalDimensions({
+  x: roundCoord((SAFE_ZONE_PX_WIDTH - defaultPx.width) / 2),
+  y: roundCoord((SAFE_ZONE_PX_HEIGHT - defaultPx.height) / 2),
+  width: roundCoord(defaultPx.width),
+  height: roundCoord(defaultPx.height),
+  rotation: 0,
+  scale: 1,
+  physicalWidthInches: 0,
+  physicalHeightInches: 0,
+});
+
+// Create an empty side (no artwork) for testing 1-sided / blank states.
+export function createEmptySideDesign(): SideDesign {
+  return {
+    originalImage: null,
+    originalImageData: null,
+    placementData: { ...DEFAULT_PLACEMENT },
+    compositeProofImage: null,
+    isOutOfBounds: false,
+    fileName: null,
+  };
+}
+
+/**
+ * Create a side with artwork.
+ * displaySrc is what Konva draws (blob: URL preferred).
+ * printDataUrl is the base64 raster payload for Resend (required when displaySrc is blob:).
+ */
+export function createSideDesign(
+  displaySrc: string,
+  fileName: string | null,
+  printDataUrl?: string | null
+): SideDesign {
+  return {
+    originalImage: displaySrc,
+    // Fall back to displaySrc when callers still pass a data URL as the only src.
+    originalImageData: printDataUrl ?? (displaySrc.startsWith("data:") ? displaySrc : null),
+    placementData: { ...DEFAULT_PLACEMENT },
+    compositeProofImage: null,
+    isOutOfBounds: false,
+    fileName,
+  };
+}
+
+// Map a SideDesign into the exact designs.front / designs.back payload shape.
+export function toSideDesignPayload(side: SideDesign): SideDesignPayload {
+  const hasDesign = Boolean(side.originalImage);
+  // Prefer the dedicated print data URL; never send a blob: URL to the server.
+  const printData =
+    side.originalImageData && side.originalImageData.startsWith("data:")
+      ? side.originalImageData
+      : side.originalImage && side.originalImage.startsWith("data:")
+        ? side.originalImage
+        : null;
+  return {
+    hasDesign,
+    originalImageData: hasDesign ? printData : null,
+    placementData: hasDesign ? side.placementData : null,
+    compositeProofImage: hasDesign ? (side.compositeProofImage ?? null) : null,
+  };
+}
+
+// List which sides with artwork are currently outside the Safe Print Zone.
+export function getOutOfBoundsSideLabels(front: SideDesign, back: SideDesign): string[] {
+  const labels: string[] = [];
+  if (front.originalImage && front.isOutOfBounds) labels.push("Front");
+  if (back.originalImage && back.isOutOfBounds) labels.push("Back");
+  return labels;
+}
+
+// Build a clear toast when one or both designed sides are out of bounds.
+export function buildOutOfBoundsToastMessage(labels: string[]): string {
+  if (labels.length === 0) {
+    return "Your design is outside the print area. Please resize or move it inside the box to continue.";
+  }
+  const which = labels.join(" and ");
+  return `Your ${which} design is outside the print area. Please resize or move it inside the box to continue.`;
+}
+
+// Pick the active side design by current Front/Back view.
+export function getActiveSide(front: SideDesign, back: SideDesign, view: ShirtView): SideDesign {
+  return view === "front" ? front : back;
+}
+
+/** Wait helper used when briefly switching sides to capture composite proofs. */
+export function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
