@@ -57,6 +57,8 @@ export default function TShirtDesignerApp() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [entryResult, setEntryResult] = useState<ContestEntryResult | null>(null);
   const [livePhysical, setLivePhysical] = useState<PhysicalDimensionsDisplay | null>(null);
+  // Submit stays disabled until both Front/Back shirt SVG templates are painted on their stages.
+  const [shirtTemplatesLoaded, setShirtTemplatesLoaded] = useState(false);
 
   // Keep latest display URLs in refs so unmount cleanup can revoke the current blob: URLs.
   const frontImageRef = useRef<string | null>(null);
@@ -80,13 +82,14 @@ export default function TShirtDesignerApp() {
   const isDesignEmpty = !hasFront && !hasBack;
   const formComplete = Boolean(entrantName.trim() && entrantEmail.trim() && acceptedTerms);
   // Submit is never blocked by out-of-bounds — artwork is hard-clamped inside the print zone.
-  const canSubmit = formComplete && !isDesignEmpty && !isSubmitting;
+  // Also wait for both shirt templates so composite proofs never miss the SVG background.
+  const canSubmit = formComplete && !isDesignEmpty && !isSubmitting && shirtTemplatesLoaded;
 
-  // Front/Back toggle: update view only — do NOT remount the Stage (avoids memory churn / re-init loops).
+  // Front/Back toggle: CSS opacity only — both stages stay mounted (no remount / canvas clear).
   const handleViewChange = (next: ShirtView) => {
     if (next === view) return;
     if (active.originalImage) {
-      const proof = canvasRef.current?.exportCompositeProof() || null;
+      const proof = canvasRef.current?.exportCompositeProof(view) || null;
       setActive((prev) => ({ ...prev, compositeProofImage: proof }));
     }
     setLivePhysical(null);
@@ -123,6 +126,7 @@ export default function TShirtDesignerApp() {
     if (isSubmittingRef.current) return;
     if (!formComplete) return toast.error("Complete your name, email, and terms checkbox.");
     if (isDesignEmpty) return toast.error("Add a Front or Back design before submitting.");
+    if (!shirtTemplatesLoaded) return toast.error("Shirt templates are still loading. Please wait a moment.");
 
     isSubmittingRef.current = true;
     // Force the Submit button into the loading/disabled state before any async work.
@@ -132,7 +136,8 @@ export default function TShirtDesignerApp() {
     });
 
     try {
-      const { front, back } = await captureBothSideProofs({ frontDesign, backDesign, view, setView, canvasRef });
+      // Both stages are mounted — captureBothSideProofs snapshots frontStageRef + backStageRef directly.
+      const { front, back } = await captureBothSideProofs({ frontDesign, backDesign, canvasRef });
       setFrontDesign(front);
       setBackDesign(back);
       const result = await submitContestEntry({
@@ -173,28 +178,34 @@ export default function TShirtDesignerApp() {
           shirtColor={shirtColor}
           onShirtColorChange={(color) => {
             setShirtColor(color);
+            // Color change reloads both shirt SVGs — block submit until they paint again.
+            setShirtTemplatesLoaded(false);
             setFrontDesign((p) => ({ ...p, compositeProofImage: null }));
             setBackDesign((p) => ({ ...p, compositeProofImage: null }));
           }}
           view={view} onViewChange={handleViewChange}
           hasFrontDesign={hasFront} hasBackDesign={hasBack}
         />
-        {/* No key={view}: keep one Stage instance across Front/Back to avoid remount leaks. */}
+        {/* Both Front and Back stages stay mounted; view only toggles CSS opacity. */}
         <ShirtCanvasEditor
-          canvasRef={canvasRef} shirtColor={shirtColor} view={view}
-          originalImageData={active.originalImage} placement={active.placementData}
-          onPlacementChange={(next) => {
+          canvasRef={canvasRef}
+          shirtColor={shirtColor}
+          view={view}
+          frontDesign={frontDesign}
+          backDesign={backDesign}
+          onPlacementChange={(side, next) => {
             setLivePhysical(null);
-            setActive((prev) => ({
+            const apply = (prev: SideDesign) => ({
               ...prev,
               placementData: withPhysicalDimensions(clampPlacementInsideSafeZone(next)),
               compositeProofImage: null,
-            }));
+            });
+            if (side === "front") setFrontDesign(apply);
+            else setBackDesign(apply);
           }}
           onLivePhysicalDimensions={setLivePhysical}
-          fileName={active.fileName || null}
           physicalDimensions={physicalDimensions}
-          showGuides={showGuides} hasActiveDesign={Boolean(active.originalImage)}
+          showGuides={showGuides}
           onToggleGuides={() => setShowGuides((prev) => { toast.message(prev ? "Guides Hidden" : "Guides Shown"); return !prev; })}
           onAutoStraighten={() => {
             if (!active.originalImage) return;
@@ -224,6 +235,7 @@ export default function TShirtDesignerApp() {
             toast.success("Placement reset");
           }}
           onClearSide={clearActiveSide}
+          onShirtTemplatesLoadedChange={setShirtTemplatesLoaded}
         />
         <ProductConfigControls
           activeView={view}

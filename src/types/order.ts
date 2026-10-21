@@ -63,6 +63,11 @@ export interface ContestEntryResult {
 }
 
 export interface ShirtCanvasHandle {
-  exportCompositeProof: () => string;
+  /** Export one continuously mounted side (defaults to the currently visible view). */
+  exportCompositeProof: (side?: ShirtView) => string;
+  /** Snapshot Front and Back stage refs without remounting or view-swapping. */
+  exportBothCompositeProofs: () => { front: string; back: string };
   centerAndResetDesign: () => void;
+  /** True when both shirt SVG templates report status === "loaded". */
+  areShirtTemplatesLoaded: () => boolean;
 }
