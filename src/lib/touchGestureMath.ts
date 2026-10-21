@@ -160,22 +160,48 @@ export function isRectOutOfSafeZone(rect: BoundingBoxRect): boolean {
 }
 
 /**
- * Clamp placement so the rotated artwork's axis-aligned bounding box stays inside SAFE_PRINT_ZONE.
- * Uses the rotated AABB (not an unrotated width/height assumption) to avoid snap/flip when spinning.
+ * Largest uniform scale where the rotated artwork's AABB still fits inside SAFE_PRINT_ZONE.
+ * Used to hard-stop corner resize / pinch so art fills the zone but never grows past it.
  */
-export function clampPlacementInsideSafeZone(placement: PlacementData): PlacementData {
-  const scale = Math.abs(placement.scale) || 1;
-  const w = placement.width * scale;
-  const h = placement.height * scale;
-  const rad = (normalizeRotationDeg(placement.rotation) * Math.PI) / 180;
+export function maxScaleInsideSafeZone(
+  width: number,
+  height: number,
+  rotationDeg: number
+): number {
+  const rad = (normalizeRotationDeg(rotationDeg) * Math.PI) / 180;
   const cos = Math.abs(Math.cos(rad));
   const sin = Math.abs(Math.sin(rad));
-  // Axis-aligned size of the rotated rectangle
+  // AABB of a w×h rect rotated by `rotation`: (w|cos|+h|sin|) × (w|sin|+h|cos|)
+  const denomW = width * cos + height * sin;
+  const denomH = width * sin + height * cos;
+  const maxByW = denomW > 0.0001 ? SAFE_PRINT_ZONE.width / denomW : Number.POSITIVE_INFINITY;
+  const maxByH = denomH > 0.0001 ? SAFE_PRINT_ZONE.height / denomH : Number.POSITIVE_INFINITY;
+  return Math.max(0.15, Math.min(maxByW, maxByH));
+}
+
+/**
+ * Clamp placement so the rotated artwork's axis-aligned bounding box stays inside SAFE_PRINT_ZONE.
+ * Shrinks scale first (so resize cannot overflow), then clamps the center position.
+ */
+export function clampPlacementInsideSafeZone(placement: PlacementData): PlacementData {
+  const rotation = normalizeRotationDeg(placement.rotation);
+  const prevScale = Math.abs(placement.scale) || 1;
+
+  // Cap scale so the art can fill the zone but never exceed it (even when rotated).
+  let scale = Math.min(prevScale, maxScaleInsideSafeZone(placement.width, placement.height, rotation));
+  scale = Math.max(0.15, scale);
+
+  // Keep the visual center stable when we have to shrink scale.
+  const prevCenterX = SAFE_PRINT_ZONE.x + placement.x + (placement.width * prevScale) / 2;
+  const prevCenterY = SAFE_PRINT_ZONE.y + placement.y + (placement.height * prevScale) / 2;
+
+  const w = placement.width * scale;
+  const h = placement.height * scale;
+  const rad = (rotation * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
   const aabbW = w * cos + h * sin;
   const aabbH = w * sin + h * cos;
-
-  const centerX = SAFE_PRINT_ZONE.x + placement.x + w / 2;
-  const centerY = SAFE_PRINT_ZONE.y + placement.y + h / 2;
 
   const minCX = SAFE_PRINT_ZONE.x + aabbW / 2;
   const maxCX = SAFE_PRINT_ZONE.x + SAFE_PRINT_ZONE.width - aabbW / 2;
@@ -183,16 +209,16 @@ export function clampPlacementInsideSafeZone(placement: PlacementData): Placemen
   const maxCY = SAFE_PRINT_ZONE.y + SAFE_PRINT_ZONE.height - aabbH / 2;
 
   const clampedCX =
-    maxCX < minCX ? SAFE_PRINT_ZONE.x + SAFE_PRINT_ZONE.width / 2 : Math.max(minCX, Math.min(centerX, maxCX));
+    maxCX < minCX ? SAFE_PRINT_ZONE.x + SAFE_PRINT_ZONE.width / 2 : Math.max(minCX, Math.min(prevCenterX, maxCX));
   const clampedCY =
-    maxCY < minCY ? SAFE_PRINT_ZONE.y + SAFE_PRINT_ZONE.height / 2 : Math.max(minCY, Math.min(centerY, maxCY));
+    maxCY < minCY ? SAFE_PRINT_ZONE.y + SAFE_PRINT_ZONE.height / 2 : Math.max(minCY, Math.min(prevCenterY, maxCY));
 
   const xy = nodeCenterToPlacementXY(clampedCX, clampedCY, placement.width, placement.height, scale);
   return {
     ...placement,
     x: xy.x,
     y: xy.y,
-    scale,
-    rotation: roundCoord(normalizeRotationDeg(placement.rotation)),
+    scale: roundCoord(scale),
+    rotation: roundCoord(rotation),
   };
 }

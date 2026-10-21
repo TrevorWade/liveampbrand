@@ -10,6 +10,7 @@ import {
   MultiTouchSnapshot,
   clampPlacementInsideSafeZone,
   computeTwoFingerGesture,
+  maxScaleInsideSafeZone,
   nodeCenterToPlacementXY,
   normalizeRotationDeg,
   placementToNodeCenter,
@@ -237,6 +238,33 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
                   })));
                 }}
                 onTransform={() => {
+                  const node = designNodeRef.current;
+                  if (!node) return;
+
+                  // Live hard-clamp: scale cannot grow past the Safe Print Zone (fills it, never overflows).
+                  const rotation = normalizeRotationDeg(node.rotation());
+                  const maxScale = maxScaleInsideSafeZone(node.width(), node.height(), rotation);
+                  const scale = Math.min(Math.max(0.15, Math.abs(node.scaleX()) || 1), maxScale);
+                  node.scaleX(scale);
+                  node.scaleY(scale);
+                  node.rotation(rotation);
+
+                  const xy = nodeCenterToPlacementXY(node.x(), node.y(), node.width(), node.height(), scale);
+                  const clamped = clampPlacementInsideSafeZone({
+                    x: xy.x,
+                    y: xy.y,
+                    width: node.width(),
+                    height: node.height(),
+                    scale,
+                    rotation,
+                    physicalWidthInches: 0,
+                    physicalHeightInches: 0,
+                  });
+                  const center = placementToNodeCenter(clamped);
+                  node.position(center);
+                  node.scaleX(clamped.scale);
+                  node.scaleY(clamped.scale);
+
                   reportLivePhysical();
                 }}
                 onTransformEnd={() => {
@@ -304,6 +332,22 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
                 borderStroke={guideColor}
                 anchorStroke={guideColor}
                 anchorFill="#ffffff"
+                // Reject transform boxes whose rotated AABB would exceed the Safe Print Zone.
+                boundBoxFunc={(oldBox, newBox) => {
+                  const w = Math.abs(newBox.width);
+                  const h = Math.abs(newBox.height);
+                  // Konva bound boxes use radians for rotation.
+                  const rotationDeg = (newBox.rotation * 180) / Math.PI;
+                  const rad = normalizeRotationDeg(rotationDeg) * (Math.PI / 180);
+                  const cos = Math.abs(Math.cos(rad));
+                  const sin = Math.abs(Math.sin(rad));
+                  const aabbW = w * cos + h * sin;
+                  const aabbH = w * sin + h * cos;
+                  if (aabbW > SAFE_PRINT_ZONE.width + 0.5 || aabbH > SAFE_PRINT_ZONE.height + 0.5) {
+                    return oldBox;
+                  }
+                  return newBox;
+                }}
               />
             )}
           </Layer>
