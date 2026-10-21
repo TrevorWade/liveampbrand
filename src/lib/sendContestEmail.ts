@@ -123,7 +123,8 @@ function buildEmailBody(payload: ContestEntryPayload, entryId: string): { subjec
     .filter((s) => payload.designs[s].hasDesign)
     .map((s) => `${s}: ${formatPrintSizeForEmail(s, payload)}`)
     .join("; ");
-  const subject = `Contest Entry ${entryId} — ${payload.entrantName}`;
+  // Subject stays human-readable — entry ID lives in the email body only.
+  const subject = `Contest Entry — ${payload.entrantName}`;
   const text = [
     `Contest entry ${entryId}`,
     `Name: ${payload.entrantName}`,
