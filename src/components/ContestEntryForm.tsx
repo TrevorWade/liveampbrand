@@ -108,19 +108,20 @@ export default function ContestEntryForm({
           if (submitLocked) return;
           onSubmit();
         }}
-        className={`w-full flex items-center justify-center gap-2 font-extrabold py-3.5 px-8 text-sm shadow-lg transition touch-manipulation ${
+        // Match Upload CTA: rounded-xl, brand blue, bold black label + icon.
+        className={`w-full flex items-center justify-center gap-2 rounded-xl px-8 py-3.5 text-sm font-bold shadow-md transition touch-manipulation ${
           submitLocked
-            ? "rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700 cursor-not-allowed pointer-events-none"
-            : "rounded-full bg-brand-blue hover:brightness-110 text-black active:scale-[0.99]"
+            ? "bg-zinc-800 text-zinc-400 border border-zinc-700 cursor-not-allowed pointer-events-none"
+            : "bg-brand-blue hover:brightness-110 text-black active:scale-[0.99]"
         }`}
       >
         {isSubmitting ? (
           <>
-            <Loader2 className="h-4 w-4 animate-spin text-zinc-300" /> Submitting design…
+            <Loader2 className="h-4 w-4 animate-spin text-zinc-300" strokeWidth={2.5} /> Submitting design…
           </>
         ) : (
           <>
-            <Trophy className="h-4 w-4 text-black" /> Submit Design to Contest
+            <Trophy className="h-4 w-4 text-black" strokeWidth={2.5} /> Submit Design to Contest
           </>
         )}
       </button>
