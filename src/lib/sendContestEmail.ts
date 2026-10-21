@@ -83,8 +83,20 @@ export function friendlyEmailDeliveryError(raw: string | undefined): string {
   ) {
     return "Your design images are too large to email. Please upload a smaller photo and try again.";
   }
+  // Resend test domain can only mail the account owner — missing CONTEST_FROM_EMAIL causes this live.
+  if (
+    detail.includes("only send testing emails") ||
+    detail.includes("verify a domain") ||
+    detail.includes("domain is not verified") ||
+    detail.includes("not verified")
+  ) {
+    return "Email delivery is misconfigured (sender domain). Please contact the contest host.";
+  }
   if (detail.includes("rate limit") || detail.includes("429")) {
     return "The contest inbox is busy right now. Please wait a moment and try again.";
+  }
+  if (detail.includes("invalid api key") || detail.includes("unauthorized") || detail.includes("401")) {
+    return "Email delivery is misconfigured (API key). Please contact the contest host.";
   }
   return "Could not send the contest entry email. Please try again later.";
 }
@@ -140,7 +152,9 @@ export async function sendContestEntryEmail(
   const { subject, text, html } = buildEmailBody(payload, entryId);
   const attachments = collectAttachments(payload);
   const resendKey = process.env.RESEND_API_KEY;
-  const fromAddress = process.env.CONTEST_FROM_EMAIL || "Contest <onboarding@resend.dev>";
+  // Production must set CONTEST_FROM_EMAIL to a verified domain (e.g. Contest <no-reply@ampbrand.com>).
+  // The resend.dev fallback can only deliver to the Resend account owner — not contact@ampbrand.com.
+  const fromAddress = (process.env.CONTEST_FROM_EMAIL || "").trim();
 
   // Fail fast when designed sides produced zero attachable rasters (MIME strip / reject).
   const expectedMin = (["front", "back"] as const).reduce((n, side) => {
@@ -163,6 +177,17 @@ export async function sendContestEntryEmail(
   }
 
   if (resendKey) {
+    if (!fromAddress || fromAddress.toLowerCase().includes("onboarding@resend.dev")) {
+      console.error(
+        "[contest-email] CONTEST_FROM_EMAIL missing or still on resend.dev — cannot mail contact@ampbrand.com"
+      );
+      return {
+        ok: false,
+        mode: "resend",
+        error: "The ampbrand.com domain is not verified / CONTEST_FROM_EMAIL is not set for production.",
+      };
+    }
+
     try {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -180,6 +205,7 @@ export async function sendContestEntryEmail(
           attachments: attachments.map((a) => ({
             filename: a.filename,
             content: a.content.toString("base64"),
+            content_type: a.contentType,
           })),
         }),
       });
@@ -199,6 +225,7 @@ export async function sendContestEntryEmail(
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   if (smtpHost && smtpUser && smtpPass) {
+    const smtpFrom = fromAddress || smtpUser;
     try {
       const transporter = nodemailer.createTransport({
         host: smtpHost,
@@ -207,7 +234,7 @@ export async function sendContestEntryEmail(
         auth: { user: smtpUser, pass: smtpPass },
       });
       await transporter.sendMail({
-        from: fromAddress,
+        from: smtpFrom,
         to: CONTEST_INBOX,
         replyTo: payload.entrantEmail,
         subject,
