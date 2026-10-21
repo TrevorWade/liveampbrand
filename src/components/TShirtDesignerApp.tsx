@@ -15,18 +15,16 @@ import ShirtStyleHeaderControls from "@/components/ShirtStyleHeaderControls";
 import { submitContestEntry } from "@/actions/submitContestEntry";
 import { captureBothSideProofs } from "@/lib/captureDesignProofs";
 import {
-  buildOutOfBoundsToastMessage,
   createEmptySideDesign,
   createSideDesign,
   placementFittingImageAspect,
   getActiveSide,
-  getOutOfBoundsSideLabels,
   toSideDesignPayload,
 } from "@/lib/dualDesign";
 import { revokeObjectUrlIfNeeded } from "@/lib/objectUrl";
 import { PhysicalDimensionsDisplay, physicalDisplayFromPlacement, withPhysicalDimensions } from "@/lib/physicalDimensions";
 import { STAGE_HEIGHT } from "@/lib/shirtAssets";
-import { straightenPlacementAroundCenter } from "@/lib/touchGestureMath";
+import { clampPlacementInsideSafeZone, straightenPlacementAroundCenter } from "@/lib/touchGestureMath";
 import { ContestEntryResult, SideDesign, ShirtCanvasHandle, ShirtColor, ShirtView } from "@/types/order";
 
 const ShirtCanvasEditor = dynamic(() => import("@/components/ShirtCanvasEditor"), {
@@ -79,11 +77,10 @@ export default function TShirtDesignerApp() {
     view === "front" ? setFrontDesign(updater) : setBackDesign(updater);
   const hasFront = Boolean(frontDesign.originalImage);
   const hasBack = Boolean(backDesign.originalImage);
-  const oobLabels = getOutOfBoundsSideLabels(frontDesign, backDesign);
-  const isOutOfBounds = oobLabels.length > 0;
   const isDesignEmpty = !hasFront && !hasBack;
   const formComplete = Boolean(entrantName.trim() && entrantEmail.trim() && acceptedTerms);
-  const canSubmit = formComplete && !isDesignEmpty && !isOutOfBounds && !isSubmitting;
+  // Submit is never blocked by out-of-bounds — artwork is hard-clamped inside the print zone.
+  const canSubmit = formComplete && !isDesignEmpty && !isSubmitting;
 
   // Front/Back toggle: update view only — do NOT remount the Stage (avoids memory churn / re-init loops).
   const handleViewChange = (next: ShirtView) => {
@@ -126,7 +123,6 @@ export default function TShirtDesignerApp() {
     if (isSubmittingRef.current) return;
     if (!formComplete) return toast.error("Complete your name, email, and terms checkbox.");
     if (isDesignEmpty) return toast.error("Add a Front or Back design before submitting.");
-    if (isOutOfBounds) return toast.error(buildOutOfBoundsToastMessage(oobLabels));
 
     isSubmittingRef.current = true;
     // Force the Submit button into the loading/disabled state before any async work.
@@ -189,7 +185,11 @@ export default function TShirtDesignerApp() {
           originalImageData={active.originalImage} placement={active.placementData}
           onPlacementChange={(next) => {
             setLivePhysical(null);
-            setActive((prev) => ({ ...prev, placementData: withPhysicalDimensions(next), compositeProofImage: null }));
+            setActive((prev) => ({
+              ...prev,
+              placementData: withPhysicalDimensions(clampPlacementInsideSafeZone(next)),
+              compositeProofImage: null,
+            }));
           }}
           onLivePhysicalDimensions={setLivePhysical}
           fileName={active.fileName || null}
@@ -198,7 +198,13 @@ export default function TShirtDesignerApp() {
           onToggleGuides={() => setShowGuides((prev) => { toast.message(prev ? "Guides Hidden" : "Guides Shown"); return !prev; })}
           onAutoStraighten={() => {
             if (!active.originalImage) return;
-            setActive((prev) => ({ ...prev, placementData: withPhysicalDimensions(straightenPlacementAroundCenter(prev.placementData)), compositeProofImage: null }));
+            setActive((prev) => ({
+              ...prev,
+              placementData: withPhysicalDimensions(
+                clampPlacementInsideSafeZone(straightenPlacementAroundCenter(prev.placementData))
+              ),
+              compositeProofImage: null,
+            }));
             toast.success("Image Straightened");
           }}
           onResetPlacement={() => {
@@ -212,17 +218,12 @@ export default function TShirtDesignerApp() {
               return {
                 ...prev,
                 placementData: nextPlacement,
-                isOutOfBounds: false,
                 compositeProofImage: null,
               };
             });
             toast.success("Placement reset");
           }}
           onClearSide={clearActiveSide}
-          isOutOfBounds={Boolean(active.originalImage && active.isOutOfBounds)}
-          onOutOfBoundsChange={(oob) =>
-            setActive((prev) => (prev.isOutOfBounds === oob ? prev : { ...prev, isOutOfBounds: oob }))
-          }
         />
         <ProductConfigControls
           activeView={view}

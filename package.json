@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "konva": "^9.3.18",
+    "konva": "^10.9.0",
     "lucide-react": "^0.469.0",
     "next": "^16.4.2",
     "nodemailer": "^10.2.0",

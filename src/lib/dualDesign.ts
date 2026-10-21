@@ -53,7 +53,6 @@ export function createEmptySideDesign(): SideDesign {
     originalImageData: null,
     placementData: { ...DEFAULT_PLACEMENT },
     compositeProofImage: null,
-    isOutOfBounds: false,
     fileName: null,
     naturalWidth: null,
     naturalHeight: null,
@@ -82,7 +81,6 @@ export function createSideDesign(
       ? placementFittingImageAspect(naturalWidth as number, naturalHeight as number)
       : { ...DEFAULT_PLACEMENT },
     compositeProofImage: null,
-    isOutOfBounds: false,
     fileName,
     naturalWidth: hasNatural ? (naturalWidth as number) : null,
     naturalHeight: hasNatural ? (naturalHeight as number) : null,
@@ -105,23 +103,6 @@ export function toSideDesignPayload(side: SideDesign): SideDesignPayload {
     placementData: hasDesign ? side.placementData : null,
     compositeProofImage: hasDesign ? (side.compositeProofImage ?? null) : null,
   };
-}
-
-// List which sides with artwork are currently outside the Safe Print Zone.
-export function getOutOfBoundsSideLabels(front: SideDesign, back: SideDesign): string[] {
-  const labels: string[] = [];
-  if (front.originalImage && front.isOutOfBounds) labels.push("Front");
-  if (back.originalImage && back.isOutOfBounds) labels.push("Back");
-  return labels;
-}
-
-// Build a clear toast when one or both designed sides are out of bounds.
-export function buildOutOfBoundsToastMessage(labels: string[]): string {
-  if (labels.length === 0) {
-    return "Your design is outside the print area. Please resize or move it inside the box to continue.";
-  }
-  const which = labels.join(" and ");
-  return `Your ${which} design is outside the print area. Please resize or move it inside the box to continue.`;
 }
 
 // Pick the active side design by current Front/Back view.

@@ -30,7 +30,6 @@ export interface SideDesign {
   originalImageData?: string | null;
   placementData: PlacementData;
   compositeProofImage?: string | null;
-  isOutOfBounds?: boolean;
   fileName?: string | null;
   /** Natural pixel size of the uploaded artwork — used to reset without distorting aspect. */
   naturalWidth?: number | null;

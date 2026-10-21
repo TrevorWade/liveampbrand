@@ -1,12 +1,20 @@
 "use client";
 
-// Konva canvas: OOB checks + live print-size inches; floating utility toolbar overlay.
+// Konva canvas: center-pivoted rotation, rotated-AABB clamp, live print-size inches.
 
-import React, { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
+import React, { useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import { Stage, Layer, Image as KonvaImage, Rect, Text, Group, Transformer } from "react-konva";
 import Konva from "konva";
 import { SAFE_PRINT_ZONE, STAGE_HEIGHT, STAGE_WIDTH, getShirtPublicSrc } from "@/lib/shirtAssets";
-import { MultiTouchSnapshot, computeTwoFingerGesture, isRectOutOfSafeZone, roundCoord } from "@/lib/touchGestureMath";
+import {
+  MultiTouchSnapshot,
+  clampPlacementInsideSafeZone,
+  computeTwoFingerGesture,
+  nodeCenterToPlacementXY,
+  normalizeRotationDeg,
+  placementToNodeCenter,
+  roundCoord,
+} from "@/lib/touchGestureMath";
 import { calcPhysicalDimensionsInches, formatPhysicalDimensionsDisplay, PhysicalDimensionsDisplay, withPhysicalDimensions } from "@/lib/physicalDimensions";
 import { BRAND_BLUE } from "@/lib/brand";
 import { placementFittingImageAspect } from "@/lib/dualDesign";
@@ -14,7 +22,6 @@ import { useHtmlImage } from "@/lib/useHtmlImage";
 import CanvasUtilityToolbar from "@/components/CanvasUtilityToolbar";
 import CanvasInfoOverlays from "@/components/CanvasInfoOverlays";
 import ShirtTemplateImage from "@/components/ShirtTemplateImage";
-import RotateAnchorStem, { placeRotateAnchorBelow } from "@/components/RotateAnchorStem";
 import { PlacementData, ShirtCanvasHandle, ShirtColor, ShirtView } from "@/types/order";
 
 interface ShirtCanvasEditorProps {
@@ -26,12 +33,11 @@ interface ShirtCanvasEditorProps {
   showGuides: boolean; hasActiveDesign: boolean;
   onToggleGuides: () => void; onAutoStraighten: () => void;
   onResetPlacement: () => void; onClearSide: () => void;
-  isOutOfBounds: boolean; onOutOfBoundsChange: (outOfBounds: boolean) => void;
   canvasRef?: React.Ref<ShirtCanvasHandle>;
 }
 
 const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(function ShirtCanvasEditor(p, ref) {
-  const { shirtColor, view, originalImageData, placement, onPlacementChange, onLivePhysicalDimensions, fileName, physicalDimensions, showGuides, hasActiveDesign, onToggleGuides, onAutoStraighten, onResetPlacement, onClearSide, isOutOfBounds, onOutOfBoundsChange, canvasRef } = p;
+  const { shirtColor, view, originalImageData, placement, onPlacementChange, onLivePhysicalDimensions, fileName, physicalDimensions, showGuides, hasActiveDesign, onToggleGuides, onAutoStraighten, onResetPlacement, onClearSide, canvasRef } = p;
   const stageRef = useRef<Konva.Stage | null>(null);
   const layerRef = useRef<Konva.Layer | null>(null);
   const designNodeRef = useRef<Konva.Image | null>(null);
@@ -39,7 +45,6 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
   const safeZoneGroupRef = useRef<Konva.Group | null>(null);
   const touchStateRef = useRef<MultiTouchSnapshot | null>(null);
   const isInteractingRef = useRef(false);
-  const lastOutOfBoundsRef = useRef<boolean | null>(null);
   // Same public path as next/image underlay — browser cache hit after priority preload.
   const shirtImgElement = useHtmlImage(getShirtPublicSrc(shirtColor, view));
   const designImgElement = useHtmlImage(originalImageData);
@@ -67,24 +72,13 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
     }
   }, [designImgElement, originalImageData, placement.width, placement.height, placement.rotation, placement.scale, onPlacementChange]);
 
-  // Skip redundant OOB setState when the boolean has not changed.
-  const checkNodeBounds = useCallback(() => {
-    const node = designNodeRef.current;
-    const stage = stageRef.current;
-    const nextOut = !node || !stage || !originalImageData ? false : isRectOutOfSafeZone(node.getClientRect({ relativeTo: stage }));
-    if (lastOutOfBoundsRef.current === nextOut) return;
-    lastOutOfBoundsRef.current = nextOut;
-    onOutOfBoundsChange(nextOut);
-  }, [onOutOfBoundsChange, originalImageData]);
-
   useEffect(() => {
     Konva.hitOnDragEnabled = true;
     if (showGuides && isSelected && transformerRef.current && designNodeRef.current) {
       transformerRef.current.nodes([designNodeRef.current]);
       transformerRef.current.getLayer()?.batchDraw();
     }
-    checkNodeBounds();
-  }, [showGuides, isSelected, designImgElement, placement, checkNodeBounds]);
+  }, [showGuides, isSelected, designImgElement, placement]);
 
   useImperativeHandle(canvasRef || ref, () => ({
     // Snapshot the shirt + artwork (guides/transformer hidden) as a PNG data URL for checkout.
@@ -97,12 +91,12 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
         transformerRef.current?.visible(false);
         layer.draw();
         const dataUrl = stage.toDataURL({ pixelRatio: 2, mimeType: "image/png" });
-        safeZoneGroupRef.current?.visible(showGuides || isOutOfBounds);
+        safeZoneGroupRef.current?.visible(showGuides);
         transformerRef.current?.visible(showGuides && isSelected);
         layer.batchDraw();
         return typeof dataUrl === "string" && dataUrl.startsWith("data:image/") ? dataUrl : "";
       } catch {
-        safeZoneGroupRef.current?.visible(showGuides || isOutOfBounds);
+        safeZoneGroupRef.current?.visible(showGuides);
         transformerRef.current?.visible(showGuides && isSelected);
         layer.batchDraw();
         return "";
@@ -122,9 +116,42 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
   const reportLivePhysical = () => {
     const node = designNodeRef.current;
     if (!node || !onLivePhysicalDimensions) return;
+    const sx = Math.abs(node.scaleX());
+    const sy = Math.abs(node.scaleY());
     onLivePhysicalDimensions(formatPhysicalDimensionsDisplay(
-      calcPhysicalDimensionsInches(node.width() * node.scaleX(), node.height() * node.scaleY())
+      calcPhysicalDimensionsInches(node.width() * sx, node.height() * sy)
     ));
+  };
+
+  /**
+   * Clamp using the rotated client rect so drag does not snap when the art is spun.
+   * dragBoundFunc only runs while Konva is dragging — not during Transformer rotation.
+   */
+  const dragBoundFunc = (pos: { x: number; y: number }) => {
+    const node = designNodeRef.current;
+    const stage = stageRef.current;
+    if (!node || !stage) return pos;
+    // Extra guard: never clamp while a transform (rotate/scale) is active.
+    if (!node.isDragging()) return pos;
+
+    const prev = node.position();
+    node.position(pos);
+    const box = node.getClientRect({ relativeTo: stage });
+    let nextX = pos.x;
+    let nextY = pos.y;
+
+    if (box.x < SAFE_PRINT_ZONE.x) nextX += SAFE_PRINT_ZONE.x - box.x;
+    if (box.y < SAFE_PRINT_ZONE.y) nextY += SAFE_PRINT_ZONE.y - box.y;
+    if (box.x + box.width > SAFE_PRINT_ZONE.x + SAFE_PRINT_ZONE.width) {
+      nextX -= box.x + box.width - (SAFE_PRINT_ZONE.x + SAFE_PRINT_ZONE.width);
+    }
+    if (box.y + box.height > SAFE_PRINT_ZONE.y + SAFE_PRINT_ZONE.height) {
+      nextY -= box.y + box.height - (SAFE_PRINT_ZONE.y + SAFE_PRINT_ZONE.height);
+    }
+
+    // Restore — Konva applies the returned position as the drag result.
+    node.position(prev);
+    return { x: nextX, y: nextY };
   };
 
   const handleStageTouchMove = (e: Konva.KonvaEventObject<TouchEvent>) => {
@@ -137,12 +164,17 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
     const p2 = { x: touches[1].clientX, y: touches[1].clientY };
     const { nextSnapshot, nextPlacement } = computeTwoFingerGesture(p1, p2, touchStateRef.current, placement);
     touchStateRef.current = nextSnapshot;
-    if (nextPlacement) onPlacementChange(withPhysicalDimensions(nextPlacement));
+    // Pinch/rotate also stays clamped inside the zone (rotated AABB).
+    if (nextPlacement) onPlacementChange(withPhysicalDimensions(clampPlacementInsideSafeZone(nextPlacement)));
   };
 
-  // Brand blue on black shirts; magenta accent on white; red when out of bounds.
-  const guideColor = isOutOfBounds ? "#ef4444" : shirtColor === "black" ? BRAND_BLUE : "#db2777";
+  // Brand blue on black shirts; magenta accent on white (no red OOB state).
+  const guideColor = shirtColor === "black" ? BRAND_BLUE : "#db2777";
   const showTransformer = showGuides && isSelected && Boolean(designImgElement);
+  // Center-pivoted node: x/y is the visual center; offset is half the local (unscaled) size.
+  const nodeCenter = placementToNodeCenter(placement);
+  const offsetX = placement.width / 2;
+  const offsetY = placement.height / 2;
 
   return (
     // Outer preview card — extra top/bottom padding keeps chips in the frame gutters, off the shirt.
@@ -163,78 +195,116 @@ const ShirtCanvasEditor = forwardRef<ShirtCanvasHandle, ShirtCanvasEditorProps>(
             if (!hitGraphicOrHandle && !isMultiTouch) setIsSelected(false);
           }}
           onTouchMove={handleStageTouchMove}
-          onTouchEnd={() => { touchStateRef.current = null; isInteractingRef.current = false; checkNodeBounds(); }}
+          onTouchEnd={() => { touchStateRef.current = null; isInteractingRef.current = false; }}
         >
           <Layer ref={layerRef}>
             {shirtImgElement && (
               <KonvaImage image={shirtImgElement} x={0} y={0} width={STAGE_WIDTH} height={STAGE_HEIGHT} listening={false} preventDefault={false} />
             )}
-            <Group ref={safeZoneGroupRef} visible={showGuides || isOutOfBounds} listening={false}>
-              <Rect x={SAFE_PRINT_ZONE.x} y={SAFE_PRINT_ZONE.y} width={SAFE_PRINT_ZONE.width} height={SAFE_PRINT_ZONE.height} stroke={guideColor} strokeWidth={isOutOfBounds ? 2.5 : 1.5} dash={[6, 4]} cornerRadius={6} />
-              <Text x={SAFE_PRINT_ZONE.x + 2} y={SAFE_PRINT_ZONE.y - 14} text={isOutOfBounds ? "OUT OF PRINT ZONE" : `SAFE PRINT ZONE (${view.toUpperCase()})`} fontSize={9} fontStyle="bold" fill={guideColor} />
+            <Group ref={safeZoneGroupRef} visible={showGuides} listening={false}>
+              <Rect x={SAFE_PRINT_ZONE.x} y={SAFE_PRINT_ZONE.y} width={SAFE_PRINT_ZONE.width} height={SAFE_PRINT_ZONE.height} stroke={guideColor} strokeWidth={1.5} dash={[6, 4]} cornerRadius={6} />
+              <Text x={SAFE_PRINT_ZONE.x + 2} y={SAFE_PRINT_ZONE.y - 14} text={`SAFE PRINT ZONE (${view.toUpperCase()})`} fontSize={9} fontStyle="bold" fill={guideColor} />
             </Group>
             {designImgElement && (
               <KonvaImage
-                ref={designNodeRef} image={designImgElement}
-                x={SAFE_PRINT_ZONE.x + placement.x} y={SAFE_PRINT_ZONE.y + placement.y}
-                width={placement.width} height={placement.height}
-                scaleX={placement.scale} scaleY={placement.scale} rotation={placement.rotation}
-                draggable preventDefault={true}
-                onClick={() => setIsSelected(true)} onTap={() => setIsSelected(true)}
-                onDragMove={checkNodeBounds}
+                ref={designNodeRef}
+                image={designImgElement}
+                // Center pivot: place at center, offset by half local size (accounts for scale via Konva).
+                x={nodeCenter.x}
+                y={nodeCenter.y}
+                offsetX={offsetX}
+                offsetY={offsetY}
+                width={placement.width}
+                height={placement.height}
+                scaleX={placement.scale}
+                scaleY={placement.scale}
+                rotation={placement.rotation}
+                draggable
+                preventDefault={true}
+                dragBoundFunc={dragBoundFunc}
+                onClick={() => setIsSelected(true)}
+                onTap={() => setIsSelected(true)}
                 onDragEnd={(e) => {
-                  checkNodeBounds();
-                  onPlacementChange(withPhysicalDimensions({
+                  const node = e.target;
+                  const scale = Math.abs(node.scaleX()) || 1;
+                  const xy = nodeCenterToPlacementXY(node.x(), node.y(), node.width(), node.height(), scale);
+                  onPlacementChange(withPhysicalDimensions(clampPlacementInsideSafeZone({
                     ...placement,
-                    x: roundCoord(e.target.x() - SAFE_PRINT_ZONE.x),
-                    y: roundCoord(e.target.y() - SAFE_PRINT_ZONE.y),
-                  }));
+                    x: xy.x,
+                    y: xy.y,
+                    scale: roundCoord(scale),
+                    rotation: roundCoord(normalizeRotationDeg(node.rotation())),
+                  })));
                 }}
-                onTransform={() => { checkNodeBounds(); reportLivePhysical(); }}
+                onTransform={() => {
+                  reportLivePhysical();
+                }}
                 onTransformEnd={() => {
                   const node = designNodeRef.current;
                   if (!node) return;
-                  checkNodeBounds();
-                  // keepRatio locks X/Y — use one uniform scale so width/height never drift apart.
-                  const uniformScale = Math.abs(node.scaleX()) || 1;
-                  onPlacementChange(withPhysicalDimensions({
-                    x: roundCoord(node.x() - SAFE_PRINT_ZONE.x),
-                    y: roundCoord(node.y() - SAFE_PRINT_ZONE.y),
+
+                  // Ensure rotation stays between 0 and 360 degrees (no wrap snap / flip residue).
+                  const rotation = normalizeRotationDeg(node.rotation());
+                  node.rotation(rotation);
+
+                  // flipEnabled={false} keeps scales positive; still abs as a safety net.
+                  const uniformScale = Math.max(0.15, Math.abs(node.scaleX()) || 1);
+                  node.scaleX(uniformScale);
+                  node.scaleY(uniformScale);
+
+                  const xy = nodeCenterToPlacementXY(
+                    node.x(),
+                    node.y(),
+                    node.width(),
+                    node.height(),
+                    uniformScale
+                  );
+                  const next = clampPlacementInsideSafeZone({
+                    x: xy.x,
+                    y: xy.y,
                     width: roundCoord(node.width()),
                     height: roundCoord(node.height()),
-                    rotation: roundCoord(node.rotation()),
+                    rotation: roundCoord(rotation),
                     scale: roundCoord(uniformScale),
                     physicalWidthInches: 0,
                     physicalHeightInches: 0,
-                  }));
-                  // Keep Konva node scales matched after the gesture (prevents rare X/Y drift).
-                  node.scaleX(uniformScale);
-                  node.scaleY(uniformScale);
+                  });
+                  onPlacementChange(withPhysicalDimensions(next));
+
+                  // Sync Konva node to the clamped center-pivoted placement.
+                  const clampedCenter = placementToNodeCenter(next);
+                  node.position(clampedCenter);
+                  node.offsetX(next.width / 2);
+                  node.offsetY(next.height / 2);
+                  node.scaleX(next.scale);
+                  node.scaleY(next.scale);
+                  node.rotation(next.rotation);
                 }}
               />
             )}
             {showTransformer && (
-              <>
-                {/* Stem under the transformer so the white rotater circle paints on top of the line */}
-                <RotateAnchorStem transformerRef={transformerRef} stageRef={stageRef} stroke={guideColor} enabled={showTransformer}
-                  syncKey={`${placement.x},${placement.y},${placement.scale},${placement.rotation}`} />
-                <Transformer
-                  ref={transformerRef}
-                  rotateEnabled
-                  rotateLineVisible={false}
-                  rotateAnchorOffset={28}
-                  preventDefault
-                  // Lock proportions — corner anchors only (no mid-side stretch handles).
-                  keepRatio
-                  enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
-                  anchorSize={12}
-                  anchorCornerRadius={6}
-                  borderStroke={guideColor}
-                  anchorStroke={guideColor}
-                  anchorFill="#ffffff"
-                  anchorStyleFunc={placeRotateAnchorBelow}
-                />
-              </>
+              <Transformer
+                ref={transformerRef}
+                // Scale from the centered offset so resize does not walk the pivot.
+                centeredScaling
+                rotateEnabled
+                // Native bottom handle — do NOT manually move the rotater (that caused 180° flips on Konva 9).
+                rotateAnchorAngle={180}
+                rotateAnchorOffset={28}
+                rotateLineVisible
+                preventDefault
+                keepRatio
+                ignoreStroke
+                // Prevent mirror/flip when dragging the rotate stem or corners.
+                flipEnabled={false}
+                // Corner anchors only — no mid-side stretch handles.
+                enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
+                anchorSize={12}
+                anchorCornerRadius={6}
+                borderStroke={guideColor}
+                anchorStroke={guideColor}
+                anchorFill="#ffffff"
+              />
             )}
           </Layer>
         </Stage>
