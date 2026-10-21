@@ -59,7 +59,7 @@ function collectAttachments(payload: ContestEntryPayload): EmailAttachment[] {
       if (att) out.push(att);
     }
     if (design.compositeProofImage) {
-      const att = dataUrlToAttachment(design.compositeProofImage, `${side}-proof`);
+      const att = dataUrlToAttachment(design.compositeProofImage, `${side}-mockup`);
       if (att) out.push(att);
     }
   }
